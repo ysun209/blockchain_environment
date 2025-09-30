@@ -61,35 +61,27 @@ else
 fi
 
 # Check if validator keys exist
-if [ ! -d "$KEYSTORE_DIR/validators" ] && [ ! -f "$KEYSTORE_DIR/password.txt" ]; then
+if [ ! -d "$KEYSTORE_DIR" ] || [ ! -f "$KEYSTORE_DIR/password.txt" ] || [ -z "$(ls -A $KEYSTORE_DIR 2>/dev/null)" ]; then
     echo ""
     echo "🔑 Generating validator keys..."
     
-    # Use the simple lighthouse key generation
-    echo "Using lighthouse built-in key generation..."
+    # Use eth2-val-tools for reliable key generation
+    echo "Using eth2-val-tools for validator key generation..."
     mkdir -p "$KEYSTORE_DIR"
     
-    # Create a temporary script for key generation
-    cat > temp_keygen.sh << 'EOF'
-#!/bin/bash
-echo "password123" | lighthouse account validator new \
-  --count=4 \
-  --base-dir=/keys \
-  --password-file=/dev/stdin
-EOF
-    chmod +x temp_keygen.sh
-    
+    # Generate validator keys using eth2-val-tools
     docker run --rm \
       -v "$(pwd)/$KEYSTORE_DIR:/keys" \
-      -v "$(pwd)/temp_keygen.sh:/temp_keygen.sh" \
-      sigp/lighthouse:v4.5.0 \
-      /temp_keygen.sh
+      protolambda/eth2-val-tools:latest \
+      keystores \
+      --source-mnemonic="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" \
+      --source-min=0 \
+      --source-max=4 \
+      --out-loc="/keys" \
+      --prysm-pass="password123"
     
     # Create password file
     echo "password123" > "$KEYSTORE_DIR/password.txt"
-    
-    # Clean up
-    rm temp_keygen.sh
     
     echo "✅ Validator keys generated"
 else
