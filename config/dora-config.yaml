@@ -1,0 +1,39 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+logging:
+  level: "info"
+
+chain:
+  displayName: "Private PoS Network"
+  configPath: "/genesis/cl/config.yaml"
+
+beaconapi:
+  endpoints:
+    - name: "lighthouse-1"
+      url: "http://cl-1-lighthouse-geth:4000"
+      priority: 1
+
+executionapi:
+  endpoints:
+    - name: "geth-1"
+      url: "http://el-1-geth-lighthouse:8545"
+      priority: 1
+
+# Frontend configuration
+frontend:
+  enabled: true
+  debug: false
+  minimize: false
+  
+  # Site configuration
+  siteName: "Private PoS Explorer"
+  siteSubtitle: "Ethereum PoS Testnet Explorer"
+  
+  # Display configuration
+  validatorNamesYaml: ""
+  validatorNamesInventory: ""
+  
+  # Page configuration
+  showSensitivePage: true

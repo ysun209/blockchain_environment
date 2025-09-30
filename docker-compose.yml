@@ -1,0 +1,271 @@
+version: '3.8'
+
+services:
+  # Execution Layer (Geth)
+  el-1-geth-lighthouse:
+    image: ethereum/client-go:v1.13.4
+    container_name: el-1-geth-lighthouse
+    restart: unless-stopped
+    command:
+      - --datadir=/data
+      - --genesis=/genesis/genesis.json
+      - --networkid=${CHAIN_ID:-13371}
+      - --http
+      - --http.addr=0.0.0.0
+      - --http.port=8545
+      - --http.api=eth,net,web3,debug,admin,txpool
+      - --http.corsdomain=*
+      - --http.vhosts=*
+      - --ws
+      - --ws.addr=0.0.0.0
+      - --ws.port=8546
+      - --ws.api=eth,net,web3,debug,admin,txpool
+      - --ws.origins=*
+      - --authrpc.addr=0.0.0.0
+      - --authrpc.port=8551
+      - --authrpc.jwtsecret=/secrets/jwt.hex
+      - --authrpc.vhosts=*
+      - --metrics
+      - --metrics.addr=0.0.0.0
+      - --metrics.port=9001
+      - --port=30303
+      - --discovery.port=30303
+      - --nat=extip:0.0.0.0
+      - --allow-insecure-unlock
+      - --unlock=0x8943545177806ED17B9F23F0a21ee5948eCaa776,0x27eE006a4c4c81642b0cBdB1F0d21FbC3a05b777
+      - --password=/secrets/password.txt
+      - --mine
+      - --miner.etherbase=0x8943545177806ED17B9F23F0a21ee5948eCaa776
+    ports:
+      - "${EL_RPC_PORT:-8545}:8545"
+      - "${EL_WS_PORT:-8546}:8546"
+      - "${EL_ENGINE_PORT:-8551}:8551"
+      - "${EL_METRICS_PORT:-9001}:9001"
+      - "${EL_P2P_TCP_PORT:-30303}:30303/tcp"
+      - "${EL_P2P_UDP_PORT:-30303}:30303/udp"
+    volumes:
+      - el_data:/data
+      - ${GENESIS_DIR:-./genesis}:/genesis:ro
+      - ${JWT_FILE:-./secrets/jwt.hex}:/secrets/jwt.hex:ro
+      - ./secrets/password.txt:/secrets/password.txt:ro
+    networks:
+      - blockchain_net
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8545"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Consensus Layer (Lighthouse Beacon Node)
+  cl-1-lighthouse-geth:
+    image: sigp/lighthouse:v4.5.0
+    container_name: cl-1-lighthouse-geth
+    restart: unless-stopped
+    command:
+      - lighthouse
+      - bn
+      - --datadir=/data
+      - --testnet-dir=/genesis/cl
+      - --execution-endpoint=http://el-1-geth-lighthouse:8551
+      - --execution-jwt=/secrets/jwt.hex
+      - --http
+      - --http-address=0.0.0.0
+      - --http-port=4000
+      - --metrics
+      - --metrics-address=0.0.0.0
+      - --metrics-port=5054
+      - --port=9000
+      - --discovery-port=9000
+      - --quic-port=9001
+      - --suggested-fee-recipient=0x8943545177806ED17B9F23F0a21ee5948eCaa776
+      - --disable-enr-auto-update
+      - --enr-address=127.0.0.1
+      - --enr-tcp-port=9000
+      - --enr-udp-port=9000
+    ports:
+      - "${CL_HTTP_PORT:-4000}:4000"
+      - "${CL_METRICS_PORT:-5054}:5054"
+      - "${CL_P2P_TCP_PORT:-9000}:9000/tcp"
+      - "${CL_P2P_UDP_PORT:-9000}:9000/udp"
+      - "${CL_P2P_QUIC_PORT:-9001}:9001/udp"
+    volumes:
+      - cl_data:/data
+      - ${GENESIS_DIR:-./genesis}:/genesis:ro
+      - ${JWT_FILE:-./secrets/jwt.hex}:/secrets/jwt.hex:ro
+    networks:
+      - blockchain_net
+    depends_on:
+      el-1-geth-lighthouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4000/eth/v1/node/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Validator Client (Lighthouse)
+  vc-1-geth-lighthouse:
+    image: sigp/lighthouse:v4.5.0
+    container_name: vc-1-geth-lighthouse
+    restart: unless-stopped
+    command:
+      - lighthouse
+      - vc
+      - --datadir=/data
+      - --testnet-dir=/genesis/cl
+      - --beacon-nodes=http://cl-1-lighthouse-geth:4000
+      - --metrics
+      - --metrics-address=0.0.0.0
+      - --metrics-port=8080
+      - --suggested-fee-recipient=0x8943545177806ED17B9F23F0a21ee5948eCaa776
+      - --http
+      - --http-address=0.0.0.0
+      - --http-port=5062
+      - --unencrypted-http-transport
+    ports:
+      - "${VC_METRICS_PORT:-8080}:8080"
+      - "${VC_HTTP_PORT:-5062}:5062"
+    volumes:
+      - vc_data:/data
+      - ${GENESIS_DIR:-./genesis}:/genesis:ro
+      - ${KEYSTORE_DIR:-./validator_keys}:/validator_keys:ro
+    networks:
+      - blockchain_net
+    depends_on:
+      cl-1-lighthouse-geth:
+        condition: service_healthy
+
+  # Blockscout Database
+  blockscout-postgres:
+    image: postgres:14
+    container_name: blockscout-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: blockscout
+      POSTGRES_USER: blockscout
+      POSTGRES_PASSWORD: blockscout
+    ports:
+      - "${BLOCKSCOUT_DB_PORT:-5432}:5432"
+    volumes:
+      - blockscout_db:/var/lib/postgresql/data
+    networks:
+      - blockchain_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blockscout"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Blockscout Backend
+  blockscout:
+    image: blockscout/blockscout:5.2.3
+    container_name: blockscout
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://blockscout:blockscout@blockscout-postgres:5432/blockscout
+      ETHEREUM_JSONRPC_HTTP_URL: http://el-1-geth-lighthouse:8545
+      ETHEREUM_JSONRPC_WS_URL: ws://el-1-geth-lighthouse:8546
+      NETWORK: ${NETWORK_NAME:-private-pos}
+      SUBNETWORK: ${NETWORK_NAME:-private-pos}
+      CHAIN_ID: ${CHAIN_ID:-13371}
+      LOGO: /images/blockscout_logo.svg
+      COIN: ETH
+      COIN_NAME: Ether
+      INDEXER_DISABLE_PENDING_TRANSACTIONS_FETCHER: "true"
+      SECRET_KEY_BASE: 56NtB48ear7+wMSf0IQuWDAAazhpb31qyc7GiyspBP2vh7t5zlCsF5QDv76chXeN
+      POOL_SIZE: 30
+      ECTO_USE_SSL: "false"
+      MIX_ENV: prod
+      PORT: 4000
+    ports:
+      - "${BLOCKSCOUT_BACKEND_PORT:-4001}:4000"
+    volumes:
+      - blockscout_logs:/app/logs
+    networks:
+      - blockchain_net
+    depends_on:
+      blockscout-postgres:
+        condition: service_healthy
+      el-1-geth-lighthouse:
+        condition: service_healthy
+
+  # Blockscout Frontend
+  blockscout-frontend:
+    image: ghcr.io/blockscout/frontend:v1.22.0
+    container_name: blockscout-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_HOST: blockscout
+      NEXT_PUBLIC_API_PORT: 4000
+      NEXT_PUBLIC_API_PROTOCOL: http
+      NEXT_PUBLIC_STATS_API_HOST: http://blockscout:4000
+      NEXT_PUBLIC_NETWORK_NAME: ${NETWORK_NAME:-private-pos}
+      NEXT_PUBLIC_NETWORK_SHORT_NAME: ${NETWORK_NAME:-private-pos}
+      NEXT_PUBLIC_NETWORK_ID: ${CHAIN_ID:-13371}
+      NEXT_PUBLIC_NETWORK_CURRENCY_NAME: Ether
+      NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL: ETH
+      NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS: 18
+      NEXT_PUBLIC_API_BASE_PATH: /
+      NEXT_PUBLIC_HOMEPAGE_CHARTS: "['daily_txs']"
+    ports:
+      - "${BLOCKSCOUT_FRONTEND_PORT:-3000}:3000"
+    networks:
+      - blockchain_net
+    depends_on:
+      - blockscout
+
+  # Blockscout Verification Service
+  blockscout-verif:
+    image: ghcr.io/blockscout/smart-contract-verifier:v5.3.2
+    container_name: blockscout-verif
+    restart: unless-stopped
+    environment:
+      SMART_CONTRACT_VERIFIER__SERVER__HTTP__ADDR: 0.0.0.0:8050
+    ports:
+      - "${BLOCKSCOUT_VERIF_PORT:-8050}:8050"
+    networks:
+      - blockchain_net
+
+  # Dora UI (Optional)
+  dora:
+    image: pk910/dora:latest
+    container_name: dora
+    restart: unless-stopped
+    command:
+      - --config=/config/dora-config.yaml
+    ports:
+      - "${DORA_PORT:-8081}:8080"
+    volumes:
+      - ./config/dora-config.yaml:/config/dora-config.yaml:ro
+    networks:
+      - blockchain_net
+    depends_on:
+      cl-1-lighthouse-geth:
+        condition: service_healthy
+    profiles:
+      - dora
+
+  # Validator Key Generation Helper (run once)
+  validator-key-generation-cl-validator-keystore:
+    image: sigp/lighthouse:v4.5.0
+    container_name: validator-key-generation
+    volumes:
+      - ${KEYSTORE_DIR:-./validator_keys}:/validator_keys
+      - ./scripts:/scripts:ro
+    working_dir: /scripts
+    command: ["./generate_keys.sh"]
+    networks:
+      - blockchain_net
+    profiles:
+      - keygen
+
+volumes:
+  el_data:
+  cl_data:
+  vc_data:
+  blockscout_db:
+  blockscout_logs:
+
+networks:
+  blockchain_net:
+    driver: bridge

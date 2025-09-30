@@ -1,0 +1,35 @@
+# Environment variables
+.env
+
+# Secrets and keys
+secrets/
+validator_keys/
+*.hex
+*.key
+*.json
+password.txt
+
+# Data directories
+data/
+genesis/
+
+# Docker volumes
+volumes/
+
+# Logs
+*.log
+logs/
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+temp_*
+tmp_*
