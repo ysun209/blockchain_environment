@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  el-geth:
+    image: ethereum/client-go:stable
+    command:
+      - --http
+      - --http.api=eth,net,web3
+      - --http.addr=0.0.0.0
+      - --authrpc.vhosts=*
+      - --authrpc.addr=0.0.0.0
+      - --authrpc.jwtsecret=/secrets/jwt.hex
+      - --datadir=/data
+      - --allow-insecure-unlock
+      - --unlock=0x123463a4b065722e99115d6c222f267d9cabb524
+      - --password=/secrets/password.txt
+      - --mine
+    ports:
+      - "8545:8545" # RPC
+      - "30303:30303" # P2P
+    volumes:
+      - ./data/el:/data
+      - ./secrets:/secrets
+    networks:
+      - blockchain_net
+
+  cl-lighthouse:
+    image: sigp/lighthouse:latest
+    command:
+      - lighthouse
+      - bn
+      - --network=mainnet # This will be overridden by genesis
+      - --eth1-endpoints=http://el-geth:8545
+      - --execution-endpoint=http://el-geth:8551
+      - --execution-jwt=/secrets/jwt.hex
+      - --datadir=/data
+      - --http
+      - --http-address=0.0.0.0
+    ports:
+      - "5052:5052" # HTTP
+      - "9000:9000" # P2P
+    volumes:
+      - ./data/cl:/data
+      - ./secrets:/secrets
+    depends_on:
+      - el-geth
+    networks:
+      - blockchain_net
+
+  vc-lighthouse:
+    image: sigp/lighthouse:latest
+    command:
+      - lighthouse
+      - vc
+      - --network=mainnet # This will be overridden by genesis
+      - --beacon-nodes=http://cl-lighthouse:5052
+      - --datadir=/data
+      - --init-slashing-protection
+    volumes:
+      - ./data/vc:/data
+      - ./validator_keys:/validator_keys
+      - ./secrets:/secrets
+    depends_on:
+      - cl-lighthouse
+    networks:
+      - blockchain_net
+
+networks:
+  blockchain_net:
+    driver: bridge
